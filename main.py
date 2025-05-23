@@ -1,57 +1,51 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, UploadFile, File
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+import uuid
 import os
 import subprocess
-import uuid
 
 app = FastAPI()
 
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+# Create uploads folder if it doesn't exist
+os.makedirs("uploads", exist_ok=True)
 
-# Serve uploaded videos
-app.mount("/videos", StaticFiles(directory=UPLOAD_DIR), name="videos")
+# Serve the uploads folder statically
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
-@app.post("/generate-video/")
-async def generate_video(image: UploadFile = File(...), audio: UploadFile = File(...)):
+
+@app.post("/make-video/")
+async def make_video(image: UploadFile = File(...), audio: UploadFile = File(...)):
     # Generate unique filenames
-    unique_id = str(uuid.uuid4())
-    image_path = f"{UPLOAD_DIR}/{unique_id}_image.jpg"
-    audio_path = f"{UPLOAD_DIR}/{unique_id}_audio.mp3"
-    output_path = f"{UPLOAD_DIR}/{unique_id}_output.mp4"
+    img_path = f"uploads/{uuid.uuid4()}_{image.filename}"
+    audio_path = f"uploads/{uuid.uuid4()}_{audio.filename}"
+    output_path = f"uploads/{uuid.uuid4()}_output.mp4"
 
-    # Save uploaded files
-    with open(image_path, "wb") as img_file:
-        img_file.write(await image.read())
-    with open(audio_path, "wb") as aud_file:
-        aud_file.write(await audio.read())
+    # Save uploaded image
+    with open(img_path, "wb") as f:
+        f.write(await image.read())
 
-    # Run FFmpeg command
-    cmd = [
+    # Save uploaded audio
+    with open(audio_path, "wb") as f:
+        f.write(await audio.read())
+
+    # Run ffmpeg to create video
+    command = [
         "ffmpeg",
+        "-y",  # Overwrite if exists
         "-loop", "1",
-        "-i", image_path,
+        "-i", img_path,
         "-i", audio_path,
-        "-c:a", "aac",
         "-c:v", "libx264",
-        "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2",
-        "-t", "120",
+        "-preset", "ultrafast",
+        "-tune", "stillimage",
+        "-c:a", "aac",
+        "-b:a", "192k",
         "-shortest",
-        "-y",
         output_path
     ]
 
-    try:
-        subprocess.run(cmd, check=True)
-    except subprocess.CalledProcessError as e:
-        raise HTTPException(status_code=500, detail="Video generation failed")
+    subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-    video_url = f"/videos/{unique_id}_output.mp4"
-    return {"video_url": video_url}
-
-@app.get("/")
-def home():
-    return {
-        "message": "Image + Audio to Video API",
-        "instructions": "POST /generate-video/ with image and audio files"
-    }
+    video_url = f"/uploads/{os.path.basename(output_path)}"
+    return JSONResponse(content={"video_url": video_url})
